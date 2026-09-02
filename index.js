@@ -26,7 +26,7 @@
 
     const PLUGIN_VERSION = "1.0.0";
     const storage = vendetta.plugin.storage;
-    const logger = vendetta.plugin.logger;
+    const logger = vendetta.logger;
     const { showToast } = vendetta.ui.toasts;
     const { showConfirmationAlert, showInputAlert, showCustomAlert } = vendetta.ui.alerts;
     const semanticColors = vendetta.ui.semanticColors || {};
