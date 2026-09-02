@@ -39,7 +39,7 @@
     ui,
     plugin,
     logger,
-  } = window.vendetta;
+  } = vendetta;
 
   const React = metro.common.React;
   const RN = metro.common.ReactNative;
