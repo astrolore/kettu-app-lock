@@ -1,101 +1,104 @@
 # Kettu App Lock
 
-A PIN lock for Kettu, built against Kettu's actual plugin loader (verified by
-reading `Kettu-github` source, not assumed). See the chat writeup for the
-full source citations; short version below.
+## What I verified before writing this (from the Kettu source you uploaded)
 
-## How Kettu plugins actually work (verified)
+- Plugins are the **Vendetta/polymanifest** format: a `manifest.json` (with a
+  `main` field) plus a JS file, fetched from a URL you give the "+ install a
+  plugin" flow (`src/core/vendetta/plugins.ts`, `fetchPlugin`/`installPlugin`).
+- Your plugin's JS is `eval`'d as `vendetta => { return <your code> }` and
+  handed a `window.vendetta`-shaped object (`src/core/vendetta/api.tsx`) with
+  `patcher`, `metro`, `storage`, `ui.components.Forms`, `ui.alerts`,
+  `ui.semanticColors`, `plugin.storage` (a JSON file auto-persisted per
+  plugin, see `createMMKVBackend`), etc. Everything this plugin uses comes
+  from that object — nothing was assumed.
+- Installing from an arbitrary self-hosted URL (not the official plugin
+  proxy) requires **Developer Settings** enabled first: Discord → Kettu
+  Settings → General → enable Developer Settings, then the Plugins page will
+  let the "+" URL field accept your own URL without complaint.
 
-Kettu supports two plugin systems. The "+ icon, paste a URL" flow you
-described uses the **Vendetta-compatible** plugin manager
-(`VdPluginManager` in `src/core/vendetta/plugins.ts`), not the core-plugin
-repo system. Concretely:
+## Files
 
-- You install by pasting a URL that **ends in `/`**. Kettu fetches
-  `manifest.json` from that URL, then fetches the file named in
-  `manifest.main` (defaults to `index.js`) from the same URL.
-- That JS file is loaded with `eval` as:
-  `(vendetta => { return <your file's exact source> })(vendettaObject)`
-  then, if the result is a function, it's called **with zero arguments**.
-  That means the plugin file must evaluate directly to an object shaped
-  like `{ onLoad, onUnload, settings }` — `settings` is a React component
-  shown on the plugin's card in the Plugins list. This file is written as
-  an IIFE that captures the ambient `vendetta` itself for exactly this
-  reason (I hit this bug during testing and fixed it — see comment at the
-  top of `index.js`).
-- Plugins get a `vendetta` object exposing: patching (`vendetta.patcher`),
-  metro module finding (`vendetta.metro.findByProps`, etc.), a curated set
-  of RN/Discord bits (`vendetta.metro.common.React`,
-  `.ReactNative` — the real `react-native` package, so `AppState`,
-  `BackHandler`, `Modal` etc. are all there), Discord's alert system
-  (`vendetta.ui.alerts.*`), toasts, Discord's semantic color tokens
-  (`vendetta.ui.semanticColors`), and **persistent per-plugin storage**
-  (`vendetta.plugin.storage`) — a plain JSON object, auto-saved to a file
-  in the app's private storage on every write. That's what backs the PIN,
-  recovery password, and lockout state, so they survive killing/restarting
-  Kettu, per your requirement.
+- `manifest.json` — plugin manifest.
+- `index.js` — the whole plugin, hand-written as plain JS (no JSX, no
+  build step) so it runs as-is with no bundler — I don't have network access
+  in this environment to install esbuild, and you're on an unrooted phone
+  with no dev toolchain, so a build step would just be friction for no
+  benefit here.
 
-I did not need any additional files from you — the client repo you
-uploaded contains the full plugin-loading and API surface.
+## How to install it
 
-## What I built
+Kettu fetches plugins over HTTP(S) from a URL ending in `/`, expecting
+`manifest.json` and `index.js` at that URL. You need to host these two files
+somewhere reachable from your phone. Easiest options:
 
-- `manifest.json` + `index.js` — no build step. It's plain JS (no JSX, no
-  imports) using `React.createElement` directly, so you can install it
-  straight from your phone without a bundler.
+1. **GitHub/Codeberg Pages or a gist raw URL** — push this folder to a repo,
+   enable Pages, and use `https://yourname.github.io/kettu-app-lock/` as the
+   install URL.
+2. **On-device**: install Termux, run a static file server (e.g.
+   `python3 -m http.server` or `npx http-server`) inside the folder, and
+   install from `http://127.0.0.1:<port>/`.
 
-Covers: first-run setup (PIN + recovery password), lock on cold start,
-lock on foreground return past a configurable grace period
-(Immediately/15s/30s/1m/5m/15m/Never, default 30s), custom PIN-pad lock
-screen, escalating lockouts (every 5 fails: 30s → 1m → 2m → 4m → 8m →
-16m → capped at 30m, persisted so restarting Kettu doesn't reset it),
-forgot-PIN recovery via the recovery password, change PIN / change
-recovery password / grace period / lock now / reset PIN, all in the
-plugin's settings card.
+Then in Kettu: Settings → Plugins → "+" → paste the URL → Install.
 
-## Honest limitations (please read)
+If you ever edit `index.js`, bump the `"hash"` value in `manifest.json` (any
+different string) — that's what `fetchPlugin` checks to decide whether to
+re-download your JS on update.
 
-1. **Full-screen coverage.** There's no way to verify from Kettu's own
-   repo what Discord's internal root component is called — Discord's UI
-   code isn't in this repo, it's proprietary and only exists on your
-   device at runtime. So instead of guessing a component name to patch
-   (which could be wrong or break on a Discord update), the lock screen
-   is rendered through Discord's own alert/overlay system
-   (`vendetta.ui.alerts.showCustomAlert`, the same mechanism Kettu uses
-   for its own dialogs) inside a fully-opaque `react-native` `Modal`.
-   This reliably covers the screen in normal use. I also block the
-   Android hardware back button while locked and re-show the lock screen
-   if it's ever dismissed unexpectedly. I can't 100% guarantee no exotic
-   dismiss path exists (e.g. multi-window/split-screen edge cases) —
-   flagging this rather than claiming it's airtight.
-2. **Plaintext storage.** Per your instructions, the PIN and recovery
-   password are stored in plaintext in the plugin's storage file. On a
-   non-rooted phone this isn't casually readable by another person picking
-   up your unlocked phone (it's in the app's private storage), but it's
-   not protected against someone with file-system access (e.g. a backup
-   extraction tool, or a future root). Same caveat applies to the lockout
-   counters — they resist casual bypass (kill/reopen app, navigate away)
-   but aren't cryptographically tamper-proof.
-3. **Colors.** Discord's semantic color token *names* have changed across
-   app versions (Kettu's own source has comments about this). I used the
-   commonly-stable ones with a dark-theme fallback baked in, so it'll
-   look Discord-ish even if a token name doesn't resolve, but it's not
-   guaranteed pixel-perfect on every Discord version.
+## What it does
 
-## Hosting it
+- First enable → setup screen: create a PIN (≥4 digits) + confirm, then a
+  recovery password + confirm.
+- Locks on cold start (locking is memory-only state, so any fresh JS load —
+  app fully killed and reopened — always starts locked when enabled; this
+  gives you "lock when Kettu is opened" for free, no extra plumbing needed).
+- Locks on returning from background after your configured grace period
+  (Immediately / 15s / 30s / 1m / 5m / 15m / Never), via React Native's
+  `AppState`.
+- Escalating lockout: 5 wrong PINs → 30s lockout, then doubles every further
+  5 wrong attempts, capped at 30 minutes. Persisted in `plugin.storage` (disk
+  file), so closing/reopening/killing Kettu does not reset or skip it.
+- Settings page (shown the same place every other plugin's settings show):
+  App Lock toggle, Change PIN, Grace period, Change recovery password, Lock
+  now, Reset PIN (via recovery password), version.
+- PIN and recovery password are stored **in plaintext** in the plugin's
+  local storage file, as you asked for simplicity. That file lives in
+  Discord's private app storage (not readable by other apps on a normal,
+  unrooted phone), but it is not encrypted at rest.
 
-Put `manifest.json` and `index.js` in the same folder of any static host
-reachable by URL — e.g. a public GitHub repo (raw.githubusercontent.com
-path), a GitHub Gist, Cloudflare Pages, etc. Then in Kettu: **Plugins → +
-→ paste the folder URL ending in `/`** (e.g.
-`https://raw.githubusercontent.com/you/kettu-app-lock/main/`).
+## Real limitations (please read)
 
-## Testing note
+Kettu's plugin API has no "block everything else" primitive, so I built the
+strongest version possible with what's actually there:
 
-I don't have a Kettu/Discord Android runtime to execute this on, so I
-validated it the ways I could from this environment: replicated Kettu's
-exact `eval` loading string against this file with a stubbed `vendetta`
-object to confirm it loads and returns the right shape, and exercised
-`onLoad`/`settings()`/`onUnload` against that stub to catch runtime
-errors. Please test on-device and tell me what breaks — some of the
-Discord component/color lookups can only be confirmed live.
+- **The overlay technique**: I patch `NavigationContainer` — Discord's own
+  navigation root, which Kettu itself re-exports (`metro.common.
+  NavigationNative`) — and render the lock screen as an absolutely
+  positioned layer on top of whatever it renders, plus a `BackHandler`
+  listener that swallows the Android back button while locked. This stops
+  touch and navigation into Discord while locked. It's the same approach
+  other lock-style plugins in this ecosystem use.
+- **App switcher preview**: a plugin cannot set Android's `FLAG_SECURE`.
+  That's a native/root-level flag; nothing in Kettu's JS plugin API exposes
+  it. So if someone opens the Android recent-apps switcher, they could see a
+  frozen screenshot of whatever was on screen when you backgrounded Kettu.
+  Locking still keeps them from *interacting* with your account, but if this
+  matters to you, minimize/lock your phone itself before switching away, or
+  ask in Kettu's community whether a future core (not plugin) feature could
+  add `FLAG_SECURE`.
+- **Instant force-kill**: storage writes to disk happen essentially
+  immediately, but there is no OS-level guarantee against a write being cut
+  off if the process is killed at the exact wrong instant. In practice this
+  only risks losing the *very last* lockout-counter update, not bypassing
+  the PIN itself.
+- **Custom alert sheets can't be force-closed**: Kettu's plugin API exposes
+  `showCustomAlert` but not a matching "close this alert" function, so the
+  Change PIN / Grace period / Change recovery password sheets stay open
+  after you save — swipe down (or back-gesture, sheets aren't part of the
+  locked overlay) to dismiss them. Everything still saves correctly; it's
+  a UX rough edge, not a security or functional gap.
+
+If you hit an error when this actually loads on your device (e.g. a
+semantic-color key or Forms sub-component name has changed in your Discord
+version — the Kettu source itself warns these shift between app versions),
+paste me the exact error/stack and I'll adjust; I can't fully verify runtime
+component names without your device's console output.

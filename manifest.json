@@ -1,8 +1,9 @@
 {
   "name": "Kettu App Lock",
-  "description": "PIN-locks Discord inside Kettu after the app is backgrounded, with a configurable grace period and recovery password.",
-  "authors": [{ "name": "You" }],
+  "description": "Locks Discord behind a PIN so someone with your unlocked phone can't open your account.",
+  "authors": [
+    { "name": "You" }
+  ],
   "main": "index.js",
-  "hash": "1",
-  "version": "1.0.0"
+  "hash": "1"
 }
