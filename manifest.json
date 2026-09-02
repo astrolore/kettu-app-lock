@@ -1,0 +1,8 @@
+{
+  "name": "Kettu App Lock",
+  "description": "PIN-locks Discord inside Kettu after the app is backgrounded, with a configurable grace period and recovery password.",
+  "authors": [{ "name": "You" }],
+  "main": "index.js",
+  "hash": "1",
+  "version": "1.0.0"
+}
