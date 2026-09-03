@@ -43,7 +43,7 @@
 
   const React = metro.common.React;
   const RN = metro.common.ReactNative;
-  const { View, Text, TouchableOpacity, BackHandler, AppState } = RN;
+  const { View, Text, TouchableOpacity, BackHandler, AppState, Modal } = RN;
   const { Forms } = ui.components;
   const { FormSection, FormRow, FormSwitchRow, FormInput, FormDivider } = Forms;
   const semanticColors = ui.semanticColors || {};
@@ -358,26 +358,32 @@
       mode === "pin" ? "Enter PIN" : mode === "recovery" ? "Recovery password" : newPinStage === 1 ? "Create new PIN" : "Confirm new PIN";
 
     return React.createElement(
-      View,
+      Modal,
       {
-        style: {
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: colors.bg(),
-          zIndex: 999999,
-          elevation: 999999,
-          alignItems: "center",
-          justifyContent: "center",
-          paddingHorizontal: 24,
-        },
+        visible: true,
+        animationType: "none",
+        transparent: false,
+        statusBarTranslucent: true,
+        // Android calls this on hardware back; returning without closing
+        // means back can't dismiss the lock screen through the Modal itself
+        // (belt-and-suspenders alongside the BackHandler listener in install()).
+        onRequestClose: () => {},
       },
-      React.createElement(Text, { style: { color: colors.text(), fontSize: 22, fontWeight: "700", marginBottom: 4 } }, "Kettu Locked"),
-      React.createElement(Text, { style: { color: colors.textMuted(), fontSize: 15, marginBottom: 8 } }, title),
+      React.createElement(
+        View,
+        {
+          style: {
+            flex: 1,
+            backgroundColor: colors.bg(),
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 24,
+          },
+        },
+        React.createElement(Text, { style: { color: colors.text(), fontSize: 22, fontWeight: "700", marginBottom: 4 } }, "Kettu Locked"),
+        React.createElement(Text, { style: { color: colors.textMuted(), fontSize: 15, marginBottom: 8 } }, title),
 
-      locked &&
+        locked &&
         React.createElement(
           Text,
           { style: { color: colors.danger(), marginTop: 12 } },
@@ -450,6 +456,7 @@
             React.createElement(Text, { style: { color: "#fff", fontWeight: "600" } }, newPinStage === 1 ? "Next" : "Confirm")
           )
         )
+      )
     );
   }
 
@@ -774,33 +781,51 @@
   }
 
   function install() {
-    unpatchNav = patcher.after("NavigationContainer", metro.common.NavigationNative, (args, res) => {
-      return React.createElement(React.Fragment, null, res, React.createElement(OverlayRoot, null));
-    });
+    try {
+      unpatchNav = patcher.after("NavigationContainer", metro.common.NavigationNative, (args, res) => {
+        return React.createElement(React.Fragment, null, res, React.createElement(OverlayRoot, null));
+      });
+    } catch (e) {
+      // This is the one patch the whole lock screen depends on to have
+      // anywhere to render - if it fails, nothing else in this plugin can
+      // work, so surface it loudly instead of failing silently.
+      logger.error("Kettu App Lock: failed to attach the lock screen to NavigationContainer", e);
+      try {
+        ui.toasts.showToast("App Lock couldn't attach itself: " + (e && e.message ? e.message : String(e)));
+      } catch (_) { /* toasts unavailable, nothing more we can do to surface this */ }
+    }
 
-    backHandlerSub = BackHandler.addEventListener("hardwareBackPress", () => {
-      // Swallow back presses while locked so the lock screen can't be
-      // navigated away from.
-      return state.isLocked;
-    });
+    try {
+      backHandlerSub = BackHandler.addEventListener("hardwareBackPress", () => {
+        // Swallow back presses while locked so the lock screen can't be
+        // navigated away from.
+        return state.isLocked;
+      });
+    } catch (e) {
+      logger.error("Kettu App Lock: failed to attach BackHandler listener", e);
+    }
 
-    appStateSub = AppState.addEventListener("change", (next) => {
-      if (!plugin.storage.enabled) return;
-      if (next === "background" || next === "inactive") {
-        state.backgroundedAt = Date.now();
-      } else if (next === "active") {
-        const grace = plugin.storage.graceMs;
-        if (state.backgroundedAt != null) {
-          const elapsed = Date.now() - state.backgroundedAt;
-          if (grace === -1) {
-            // "Never" - don't lock purely for backgrounding.
-          } else if (elapsed >= grace) {
-            setLocked(true);
+    try {
+      appStateSub = AppState.addEventListener("change", (next) => {
+        if (!plugin.storage.enabled) return;
+        if (next === "background" || next === "inactive") {
+          state.backgroundedAt = Date.now();
+        } else if (next === "active") {
+          const grace = plugin.storage.graceMs;
+          if (state.backgroundedAt != null) {
+            const elapsed = Date.now() - state.backgroundedAt;
+            if (grace === -1) {
+              // "Never" - don't lock purely for backgrounding.
+            } else if (elapsed >= grace) {
+              setLocked(true);
+            }
           }
+          state.backgroundedAt = null;
         }
-        state.backgroundedAt = null;
-      }
-    });
+      });
+    } catch (e) {
+      logger.error("Kettu App Lock: failed to attach AppState listener", e);
+    }
   }
 
   function uninstall() {
@@ -818,6 +843,9 @@
         install();
       } catch (e) {
         logger.error("Kettu App Lock failed to install overlay patch", e);
+        try {
+          ui.toasts.showToast("App Lock failed to start: " + (e && e.message ? e.message : String(e)));
+        } catch (_) { /* toasts unavailable */ }
       }
     },
     onUnload() {
