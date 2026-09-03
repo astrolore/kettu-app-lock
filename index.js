@@ -52,6 +52,38 @@
   // Small color helper: Discord's semantic color keys shift between app
   // versions (Kettu's own color.ts calls this out explicitly), so every
   // lookup here has a plain hex fallback and nothing breaks if a key is gone.
+  // Kettu's `ui.alerts.showCustomAlert` doesn't hand back a close function,
+  // but the Discord module it's built on (the same one Kettu's own
+  // InputAlert component uses - see lib/ui/components/InputAlert.tsx) does
+  // expose one. Grab it directly so our sheets can dismiss themselves.
+  const AlertActionCreators = metro.findByProps("openLazy", "close");
+  function closeCustomAlert() {
+    try {
+      AlertActionCreators?.close?.();
+    } catch (e) {
+      logger.error("Kettu App Lock failed to close alert", e);
+    }
+  }
+  // Every custom-alert sheet should call this in a BackHandler listener so
+  // Android's hardware back button dismisses it instead of doing nothing.
+  function useCloseOnHardwareBack(onClose) {
+    React.useEffect(() => {
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        onClose();
+        return true;
+      });
+      return () => sub.remove();
+    }, [onClose]);
+  }
+
+  // Discord's FormInput onChange isn't guaranteed to hand back a plain
+  // string - Kettu's own InputAlert component (lib/ui/components/InputAlert.tsx)
+  // defensively unwraps a possible `{ text }` shape too. Match that here so
+  // every text field in this plugin is safe against the same drift.
+  function textChange(setter) {
+    return (v) => setter(typeof v === "string" ? v : (v && v.text) || "");
+  }
+
   const c = (key, fallback) => (semanticColors && semanticColors[key]) || fallback;
   const colors = {
     bg: () => c("BG_BASE_PRIMARY", "#1e1f22"),
@@ -357,7 +389,7 @@
         React.createElement(
           React.Fragment,
           null,
-          React.createElement(Dots, { length: 4, filled: pinEntry.value.length }),
+          React.createElement(Dots, { length: plugin.storage.pin.length || 4, filled: pinEntry.value.length }),
           error ? React.createElement(Text, { style: { color: colors.danger(), marginBottom: 8 } }, error) : null,
           React.createElement(Keypad, { onDigit: pinEntry.onDigit, onBackspace: pinEntry.onBackspace, disabled: locked }),
           React.createElement(
@@ -372,14 +404,13 @@
         React.createElement(
           React.Fragment,
           null,
-          React.createElement(Dots, { length: 4, filled: Math.min(recovery.value.length, 8) }),
           error ? React.createElement(Text, { style: { color: colors.danger(), marginBottom: 8 } }, error) : null,
           React.createElement(
             View,
             { style: { width: "100%", maxWidth: 320 } },
             React.createElement(FormInput, {
               value: recovery.value,
-              onChange: recovery.setValue,
+              onChange: textChange(recovery.setValue),
               secureTextEntry: true,
               placeholder: "Recovery password",
             })
@@ -404,7 +435,7 @@
           React.Fragment,
           null,
           React.createElement(Dots, {
-            length: 4,
+            length: newPinStage === 1 ? newPin1.value.length : newPin2.value.length,
             filled: newPinStage === 1 ? newPin1.value.length : newPin2.value.length,
           }),
           error ? React.createElement(Text, { style: { color: colors.danger(), marginBottom: 8 } }, error) : null,
@@ -426,7 +457,7 @@
   // First-run setup screen
   // ---------------------------------------------------------------------------
   function SetupScreen({ onDone }) {
-    const [step, setStep] = React.useState(1); // 1 pin, 2 confirm pin, 3 recovery, 4 confirm recovery
+    const [step, setStep] = React.useState(1); // 1 pin, 2 confirm pin, 3 recovery + confirm
     const [pin1, setPin1] = React.useState("");
     const [pin2, setPin2] = React.useState("");
     const [rec1, setRec1] = React.useState("");
@@ -439,12 +470,6 @@
     function back(setter) {
       return () => setter((v) => v.slice(0, -1));
     }
-
-    React.useEffect(() => {
-      if (step === 1 && pin1.length >= 4) {
-        // wait for explicit Next press for clarity, no auto-advance here
-      }
-    }, [pin1]);
 
     function next() {
       setError("");
@@ -460,7 +485,7 @@
           return;
         }
         setStep(3);
-      } else if (step === 4) {
+      } else if (step === 3) {
         if (rec1.length < 4) return setError("Recovery password must be at least 4 characters");
         if (rec1 !== rec2) {
           setError("Recovery passwords didn't match");
@@ -494,7 +519,7 @@
         React.createElement(
           React.Fragment,
           null,
-          React.createElement(Dots, { length: 4, filled: step === 1 ? pin1.length : pin2.length }),
+          React.createElement(Dots, { length: step === 1 ? pin1.length : pin2.length, filled: step === 1 ? pin1.length : pin2.length }),
           React.createElement(Keypad, {
             onDigit: digit(step === 1 ? setPin1 : setPin2),
             onBackspace: back(step === 1 ? setPin1 : setPin2),
@@ -502,20 +527,20 @@
           })
         ),
 
-      step >= 3 &&
+      step === 3 &&
         React.createElement(
           View,
           { style: { width: "100%", maxWidth: 320 } },
           React.createElement(FormInput, {
             value: rec1,
-            onChange: (v) => { setRec1(v); setStep(4); },
+            onChange: textChange(setRec1),
             secureTextEntry: true,
             placeholder: "Recovery password",
           }),
           React.createElement(View, { style: { height: 8 } }),
           React.createElement(FormInput, {
             value: rec2,
-            onChange: setRec2,
+            onChange: textChange(setRec2),
             secureTextEntry: true,
             placeholder: "Confirm recovery password",
           })
@@ -527,7 +552,7 @@
           onPress: next,
           style: { marginTop: 24, backgroundColor: colors.brand(), borderRadius: 8, paddingVertical: 12, paddingHorizontal: 32 },
         },
-        React.createElement(Text, { style: { color: "#fff", fontWeight: "600" } }, step === 4 ? "Finish" : "Next")
+        React.createElement(Text, { style: { color: "#fff", fontWeight: "600" } }, step === 3 ? "Finish" : "Next")
       )
     );
   }
@@ -537,6 +562,7 @@
   // from Kettu's Plugins page the same way every other plugin's settings are)
   // ---------------------------------------------------------------------------
   function ChangePinSheet({ onClose }) {
+    useCloseOnHardwareBack(onClose);
     const [stage, setStage] = React.useState("current");
     const [current, setCurrent] = React.useState("");
     const [n1, setN1] = React.useState("");
@@ -577,7 +603,7 @@
       { style: { padding: 16 } },
       React.createElement(Text, { style: { color: colors.text(), fontSize: 18, fontWeight: "700", marginBottom: 12 } }, "Change PIN"),
       error ? React.createElement(Text, { style: { color: colors.danger(), marginBottom: 8 } }, error) : null,
-      React.createElement(FormInput, { value, onChange: setValue, secureTextEntry: true, placeholder: label }),
+      React.createElement(FormInput, { value, onChange: textChange(setValue), secureTextEntry: true, placeholder: label }),
       React.createElement(
         TouchableOpacity,
         { onPress: submit, style: { marginTop: 16, backgroundColor: colors.brand(), borderRadius: 8, paddingVertical: 10, alignItems: "center" } },
@@ -587,6 +613,7 @@
   }
 
   function ChangeRecoverySheet({ onClose }) {
+    useCloseOnHardwareBack(onClose);
     const [stage, setStage] = React.useState("current");
     const [currentPin, setCurrentPin] = React.useState("");
     const [n1, setN1] = React.useState("");
@@ -627,7 +654,7 @@
       { style: { padding: 16 } },
       React.createElement(Text, { style: { color: colors.text(), fontSize: 18, fontWeight: "700", marginBottom: 12 } }, "Change recovery password"),
       error ? React.createElement(Text, { style: { color: colors.danger(), marginBottom: 8 } }, error) : null,
-      React.createElement(FormInput, { value, onChange: setValue, secureTextEntry: true, placeholder: label }),
+      React.createElement(FormInput, { value, onChange: textChange(setValue), secureTextEntry: true, placeholder: label }),
       React.createElement(
         TouchableOpacity,
         { onPress: submit, style: { marginTop: 16, backgroundColor: colors.brand(), borderRadius: 8, paddingVertical: 10, alignItems: "center" } },
@@ -637,6 +664,7 @@
   }
 
   function GracePickerSheet({ onClose }) {
+    useCloseOnHardwareBack(onClose);
     return React.createElement(
       View,
       { style: { padding: 16 } },
@@ -690,20 +718,20 @@
           label: "Change PIN",
           trailing: FormRow.Arrow ? React.createElement(FormRow.Arrow, null) : null,
           onPress: () =>
-            ui.alerts.showCustomAlert(ChangePinSheet, { onClose: () => {} /* Kettu does not expose a programmatic close for custom alerts; swipe down to close after Save. */ }),
+            ui.alerts.showCustomAlert(ChangePinSheet, { onClose: closeCustomAlert }),
         }),
         React.createElement(FormRow, {
           label: "Grace period",
           subLabel: graceLabel(plugin.storage.graceMs),
           trailing: FormRow.Arrow ? React.createElement(FormRow.Arrow, null) : null,
           onPress: () =>
-            ui.alerts.showCustomAlert(GracePickerSheet, { onClose: () => {} /* Kettu does not expose a programmatic close for custom alerts; swipe down to close after Save. */ }),
+            ui.alerts.showCustomAlert(GracePickerSheet, { onClose: closeCustomAlert }),
         }),
         React.createElement(FormRow, {
           label: "Change recovery password",
           trailing: FormRow.Arrow ? React.createElement(FormRow.Arrow, null) : null,
           onPress: () =>
-            ui.alerts.showCustomAlert(ChangeRecoverySheet, { onClose: () => {} /* Kettu does not expose a programmatic close for custom alerts; swipe down to close after Save. */ }),
+            ui.alerts.showCustomAlert(ChangeRecoverySheet, { onClose: closeCustomAlert }),
         })
       ),
       React.createElement(

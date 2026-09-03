@@ -2,8 +2,8 @@
   "name": "Kettu App Lock",
   "description": "Locks Discord behind a PIN so someone with your unlocked phone can't open your account.",
   "authors": [
-    { "name": "You" }
+    { "name": "astycat_", "id": "1275761961535017030" }
   ],
   "main": "index.js",
-  "hash": "2"
+  "hash": "3"
 }
